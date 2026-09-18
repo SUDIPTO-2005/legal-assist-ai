@@ -1,0 +1,61 @@
+# Stage 1: Build dependencies
+FROM python:3.11-slim AS builder
+
+WORKDIR /app
+
+ENV PYTHONDONTWRITEBYTECODE 1
+ENV PYTHONUNBUFFERED 1
+
+# Install system dependencies
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        gcc \
+        libpq-dev \
+        poppler-utils \
+        tesseract-ocr \
+        libmagic1 \
+        curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+RUN pip wheel --no-cache-dir --no-deps --wheel-dir /app/wheels -r requirements.txt
+
+
+# Stage 2: Final image
+FROM python:3.11-slim
+
+WORKDIR /app
+
+ENV PYTHONDONTWRITEBYTECODE 1
+ENV PYTHONUNBUFFERED 1
+
+# Install runtime dependencies
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        libpq-dev \
+        poppler-utils \
+        tesseract-ocr \
+        libmagic1 \
+        curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create unprivileged user
+RUN addgroup --system lexassist && adduser --system --group lexassist
+
+COPY --from=builder /app/wheels /wheels
+COPY --from=builder /app/requirements.txt .
+
+RUN pip install --no-cache /wheels/*
+
+COPY . .
+
+# Collect static files
+RUN mkdir -p /app/static /app/media \
+    && python manage.py collectstatic --noinput \
+    && chown -R lexassist:lexassist /app
+
+USER lexassist
+
+EXPOSE 8000
+
+CMD ["gunicorn", "config.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "4", "--threads", "2"]
